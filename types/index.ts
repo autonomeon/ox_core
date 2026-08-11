@@ -193,6 +193,33 @@ export interface OxAccountInvoice {
   paidAt?: number;
 }
 
+export interface OxAccountTransaction {
+  id: number;
+  /** The charId of the character who performed the transaction, if any. */
+  actorId?: number;
+  /** The accountId funds moved from, or null for a deposit. */
+  fromId?: number;
+  /** The accountId funds moved to, or null for a withdrawal. */
+  toId?: number;
+  amount: number;
+  message: string;
+  /** Caller-supplied reference, set by UpdateBalance/PerformTransaction. */
+  note?: string;
+  fromBalance?: number;
+  toBalance?: number;
+  date: string;
+}
+
+export interface OxAccountTransactionFilter {
+  /** Matches transactions where the account is either sender or recipient. */
+  accountId?: number;
+  /** Exact match on the note recorded with the transaction. */
+  note?: string;
+  /** Defaults to 100, clamped to 500. */
+  limit?: number;
+  offset?: number;
+}
+
 export interface OxCreateInvoice {
   /** The charId of the player creating the invoice. */
   actorId?: number;

@@ -2,7 +2,14 @@ import { getRandomInt } from '@overextended/ox_lib';
 import { OxAccount } from 'accounts/class';
 import { type Connection, GetConnection, db } from 'db';
 import { OxPlayer } from 'player/class';
-import type { OxAccountMetadata, OxAccountRole, OxAccountUserMetadata, OxCreateInvoice } from 'types';
+import type {
+  OxAccountMetadata,
+  OxAccountRole,
+  OxAccountTransaction,
+  OxAccountTransactionFilter,
+  OxAccountUserMetadata,
+  OxCreateInvoice,
+} from 'types';
 import locales from '../../common/locales';
 import { CanPerformAction } from './roles';
 
@@ -12,6 +19,10 @@ const safeRemoveBalance = `${removeBalance} AND (balance - ?) >= 0`;
 const addTransaction =
   'INSERT INTO accounts_transactions (actorId, fromId, toId, amount, message, note, fromBalance, toBalance) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
 const getBalance = 'SELECT balance FROM accounts WHERE id = ?';
+const selectTransactions = `SELECT id, actorId, fromId, toId, amount, message, note, fromBalance, toBalance, date
+  FROM accounts_transactions`;
+const DEFAULT_TRANSACTION_LIMIT = 100;
+const MAX_TRANSACTION_LIMIT = 500;
 const doesAccountExist = 'SELECT 1 FROM accounts WHERE id = ?';
 
 async function GenerateAccountId(conn: Connection) {
@@ -144,6 +155,50 @@ export async function PerformTransaction(
   conn.rollback();
 
   return { success: false, message: 'something_went_wrong' };
+}
+
+/**
+ * Select account transaction history, most recent first.
+ *
+ * Filtering on `note` is what makes a caller able to answer "did this
+ * transaction already happen?" after an interrupted operation, without
+ * reading `accounts_transactions` directly.
+ */
+export async function SelectTransactions({
+  accountId,
+  note,
+  limit,
+  offset,
+}: OxAccountTransactionFilter = {}): Promise<OxAccountTransaction[]> {
+  const conditions: string[] = [];
+  const values: (number | string)[] = [];
+
+  if (accountId !== undefined) {
+    conditions.push('(fromId = ? OR toId = ?)');
+    values.push(accountId, accountId);
+  }
+
+  if (note !== undefined) {
+    conditions.push('note = ?');
+    values.push(note);
+  }
+
+  // Clamped rather than trusted: an export is reachable by every resource on
+  // the server, and this table only grows.
+  const rowLimit = Math.min(Math.max(Number(limit) || DEFAULT_TRANSACTION_LIMIT, 1), MAX_TRANSACTION_LIMIT);
+  const rowOffset = Math.max(Number(offset) || 0, 0);
+
+  values.push(rowLimit, rowOffset);
+
+  // date is a TIMESTAMP with one-second resolution, so id is what actually
+  // orders transactions recorded within the same second.
+  return db.execute<OxAccountTransaction>(
+    `${selectTransactions}
+     ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+     ORDER BY date DESC, id DESC
+     LIMIT ? OFFSET ?`,
+    values,
+  );
 }
 
 export async function SelectAccounts(column: 'owner' | 'group' | 'id', id: number | string) {

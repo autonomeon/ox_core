@@ -1,6 +1,7 @@
-import { CreateNewAccount, SelectDefaultAccountId, UpdateInvoice, DeleteInvoice } from './db';
+import { CreateNewAccount, SelectDefaultAccountId, SelectTransactions, UpdateInvoice, DeleteInvoice } from './db';
 import { GetCharIdFromStateId } from 'player/db';
 import { OxAccount } from './class';
+import type { OxAccountTransactionFilter } from 'types';
 
 setInterval(() => {
   const accounts = OxAccount.getAll();
@@ -43,8 +44,17 @@ export function DeleteAccountInvoice(invoiceId: number) {
   return DeleteInvoice(invoiceId);
 }
 
+/**
+ * Return account transaction history, most recent first.
+ * @param filter Optional accountId, note, limit, and offset.
+ */
+export function GetAccountTransactions(filter: OxAccountTransactionFilter = {}) {
+  return SelectTransactions(filter);
+}
+
 exports('GetCharacterAccount', GetCharacterAccount);
 exports('GetGroupAccount', GetGroupAccount);
 exports('CreateAccount', CreateAccount);
 exports('PayAccountInvoice', PayAccountInvoice);
 exports('DeleteAccountInvoice', DeleteAccountInvoice);
+exports('GetAccountTransactions', GetAccountTransactions);

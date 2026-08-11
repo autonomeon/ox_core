@@ -233,6 +233,11 @@ CREATE TABLE IF NOT EXISTS `accounts_transactions` (
 CREATE FULLTEXT INDEX IF NOT EXISTS `accounts_transactions_message_index`
   ON `accounts_transactions` (`message`);
 
+-- `note` is the caller-supplied reference GetAccountTransactions filters on.
+-- Without this the filter is a full scan of a table that only ever grows.
+CREATE INDEX IF NOT EXISTS `accounts_transactions_note_index`
+  ON `accounts_transactions` (`note`);
+
 CREATE TABLE IF NOT EXISTS `accounts_invoices`
 (
     `id`          INT UNSIGNED AUTO_INCREMENT
