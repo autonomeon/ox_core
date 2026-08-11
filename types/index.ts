@@ -205,6 +205,8 @@ export interface OxAccountTransaction {
   message: string;
   /** Caller-supplied reference, set by UpdateBalance/PerformTransaction. */
   note?: string;
+  /** Caller-supplied key. At most one transaction carries any given value. */
+  idempotencyKey?: string;
   fromBalance?: number;
   toBalance?: number;
   date: string;
@@ -215,6 +217,8 @@ export interface OxAccountTransactionFilter {
   accountId?: number;
   /** Exact match on the note recorded with the transaction. */
   note?: string;
+  /** Exact match on the idempotency key; returns at most one transaction. */
+  idempotencyKey?: string;
   /** Defaults to 100, clamped to 500. */
   limit?: number;
   offset?: number;

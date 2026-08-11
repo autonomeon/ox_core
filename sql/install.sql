@@ -221,10 +221,16 @@ CREATE TABLE IF NOT EXISTS `accounts_transactions` (
   `amount` INT NOT NULL,
   `message` VARCHAR(255) NOT NULL,
   `note` VARCHAR(255) DEFAULT NULL,
+  -- Binary collation: the table default is case- and accent-insensitive, and
+  -- a key that matches loosely refuses transactions that are not duplicates.
+  `idempotencyKey` VARCHAR(191) COLLATE utf8mb4_bin DEFAULT NULL,
   `fromBalance` INT DEFAULT NULL,
   `toBalance` INT DEFAULT NULL,
   `date` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
+  -- At most one transaction per key. NULL is unconstrained, so a caller that
+  -- passes no key keeps the previous behaviour.
+  UNIQUE KEY `accounts_transactions_idempotency_key` (`idempotencyKey`),
   CONSTRAINT `accounts_transactions_actorId_fk` FOREIGN KEY (`actorId`) REFERENCES `characters` (`charId`) ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `accounts_transactions_fromId_fk` FOREIGN KEY (`fromId`) REFERENCES `accounts` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `accounts_transactions_toId_fk` FOREIGN KEY (`toId`) REFERENCES `accounts` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
@@ -232,11 +238,6 @@ CREATE TABLE IF NOT EXISTS `accounts_transactions` (
 
 CREATE FULLTEXT INDEX IF NOT EXISTS `accounts_transactions_message_index`
   ON `accounts_transactions` (`message`);
-
--- `note` is the caller-supplied reference GetAccountTransactions filters on.
--- Without this the filter is a full scan of a table that only ever grows.
-CREATE INDEX IF NOT EXISTS `accounts_transactions_note_index`
-  ON `accounts_transactions` (`note`);
 
 CREATE TABLE IF NOT EXISTS `accounts_invoices`
 (

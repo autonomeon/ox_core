@@ -17,13 +17,21 @@ const addBalance = 'UPDATE accounts SET balance = balance + ? WHERE id = ?';
 const removeBalance = 'UPDATE accounts SET balance = balance - ? WHERE id = ?';
 const safeRemoveBalance = `${removeBalance} AND (balance - ?) >= 0`;
 const addTransaction =
-  'INSERT INTO accounts_transactions (actorId, fromId, toId, amount, message, note, fromBalance, toBalance) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
+  'INSERT INTO accounts_transactions (actorId, fromId, toId, amount, message, note, idempotencyKey, fromBalance, toBalance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
 const getBalance = 'SELECT balance FROM accounts WHERE id = ?';
-const selectTransactions = `SELECT id, actorId, fromId, toId, amount, message, note, fromBalance, toBalance, date
+const selectTransactions = `SELECT id, actorId, fromId, toId, amount, message, note, idempotencyKey, fromBalance, toBalance, date
   FROM accounts_transactions`;
 const DEFAULT_TRANSACTION_LIMIT = 100;
 const MAX_TRANSACTION_LIMIT = 500;
 const doesAccountExist = 'SELECT 1 FROM accounts WHERE id = ?';
+
+/**
+ * A refused idempotency key is how a repeated transaction is rejected, so it
+ * has to be distinguishable from a transaction that genuinely failed.
+ */
+function isDuplicateTransaction(err: any) {
+  return err?.errno === 1062 || err?.code === 'ER_DUP_ENTRY';
+}
 
 async function GenerateAccountId(conn: Connection) {
   const date = new Date();
@@ -47,6 +55,7 @@ export async function UpdateBalance(
   message?: string,
   note?: string,
   actorId?: number,
+  idempotencyKey?: string,
 ): Promise<{ success: boolean; message?: string }> {
   amount = Number.parseInt(String(amount));
 
@@ -64,34 +73,62 @@ export async function UpdateBalance(
     };
 
   const addAction = action === 'add';
-  const success = addAction
-    ? await conn.update(addBalance, [amount, accountId])
-    : await conn.update(overdraw ? removeBalance : safeRemoveBalance, [amount, accountId, amount]);
-  if (!success)
-    return {
-      success: false,
-      message: 'insufficient_balance',
-    };
 
-  !message && (message = locales(action === 'add' ? 'deposit' : 'withdraw'));
+  // The balance change and the transaction row are one unit, so a refused
+  // insert leaves the balance where it was.
+  await conn.beginTransaction();
 
-  const didUpdate =
-    (await conn.update(addTransaction, [
-      actorId || null,
-      addAction ? null : accountId,
-      addAction ? accountId : null,
-      amount,
-      message,
-      note,
-      addAction ? null : balance - amount,
-      addAction ? balance + amount : null,
-    ])) === 1;
+  try {
+    const success = addAction
+      ? await conn.update(addBalance, [amount, accountId])
+      : await conn.update(overdraw ? removeBalance : safeRemoveBalance, [amount, accountId, amount]);
+    if (!success) {
+      await conn.rollback();
 
-  if (!didUpdate)
+      return {
+        success: false,
+        message: 'insufficient_balance',
+      };
+    }
+
+    !message && (message = locales(action === 'add' ? 'deposit' : 'withdraw'));
+
+    const didUpdate =
+      (await conn.update(addTransaction, [
+        actorId || null,
+        addAction ? null : accountId,
+        addAction ? accountId : null,
+        amount,
+        message,
+        note,
+        idempotencyKey ?? null,
+        addAction ? null : balance - amount,
+        addAction ? balance + amount : null,
+      ])) === 1;
+
+    if (!didUpdate) {
+      await conn.rollback();
+
+      return {
+        success: false,
+        message: 'something_went_wrong',
+      };
+    }
+
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+
+    if (isDuplicateTransaction(e)) return { success: false, message: 'duplicate_transaction' };
+
+    console.error(`Failed to ${action} $${amount} on account<${accountId}>`);
+    console.log(e);
+
     return {
       success: false,
       message: 'something_went_wrong',
     };
+  }
 
   emit('ox:updatedBalance', { accountId, amount, action });
 
@@ -106,6 +143,7 @@ export async function PerformTransaction(
   message?: string,
   note?: string,
   actorId?: number,
+  idempotencyKey?: string,
 ): Promise<{ success: boolean; message?: string }> {
   amount = Number.parseInt(String(amount));
 
@@ -139,15 +177,24 @@ export async function PerformTransaction(
         amount,
         message ?? locales('transfer'),
         note,
+        idempotencyKey ?? null,
         fromBalance - amount,
         toBalance + amount,
       ]);
+
+      await conn.commit();
 
       emit('ox:transferredMoney', { fromId, toId, amount });
 
       return { success: true };
     }
   } catch (e) {
+    if (isDuplicateTransaction(e)) {
+      await conn.rollback();
+
+      return { success: false, message: 'duplicate_transaction' };
+    }
+
     console.error(`Failed to transfer $${amount} from account<${fromId}> to account<${toId}>`);
     console.log(e);
   }
@@ -160,13 +207,13 @@ export async function PerformTransaction(
 /**
  * Select account transaction history, most recent first.
  *
- * Filtering on `note` is what makes a caller able to answer "did this
- * transaction already happen?" after an interrupted operation, without
- * reading `accounts_transactions` directly.
+ * Filtering on `idempotencyKey` returns the transaction a refused duplicate
+ * collided with, without reading `accounts_transactions` directly.
  */
 export async function SelectTransactions({
   accountId,
   note,
+  idempotencyKey,
   limit,
   offset,
 }: OxAccountTransactionFilter = {}): Promise<OxAccountTransaction[]> {
@@ -181,6 +228,11 @@ export async function SelectTransactions({
   if (note !== undefined) {
     conditions.push('note = ?');
     values.push(note);
+  }
+
+  if (idempotencyKey !== undefined) {
+    conditions.push('idempotencyKey = ?');
+    values.push(idempotencyKey);
   }
 
   // Clamped rather than trusted: an export is reachable by every resource on
@@ -257,6 +309,7 @@ export async function DepositMoney(
   amount: number,
   message?: string,
   note?: string,
+  idempotencyKey?: string,
 ): Promise<{ success: boolean; message?: string }> {
   amount = Number.parseInt(String(amount));
 
@@ -289,24 +342,51 @@ export async function DepositMoney(
 
   const affectedRows = await conn.update(addBalance, [amount, accountId]);
 
-  if (!affectedRows || !exports.ox_inventory.RemoveItem(playerId, 'money', amount)) {
-    conn.rollback();
+  if (!affectedRows) {
+    await conn.rollback();
     return {
       success: false,
       message: 'something_went_wrong',
     };
   }
 
-  await conn.execute(addTransaction, [
-    player.charId,
-    null,
-    accountId,
-    amount,
-    message ?? locales('deposit'),
-    note,
-    null,
-    balance + amount,
-  ]);
+  // Recorded before the inventory is touched: rolling the balance back is
+  // enough to undo a refused deposit only while the item is still there.
+  try {
+    await conn.execute(addTransaction, [
+      player.charId,
+      null,
+      accountId,
+      amount,
+      message ?? locales('deposit'),
+      note,
+      idempotencyKey ?? null,
+      null,
+      balance + amount,
+    ]);
+  } catch (e) {
+    await conn.rollback();
+
+    if (isDuplicateTransaction(e)) return { success: false, message: 'duplicate_transaction' };
+
+    console.error(`Failed to deposit $${amount} into account<${accountId}>`);
+    console.log(e);
+
+    return {
+      success: false,
+      message: 'something_went_wrong',
+    };
+  }
+
+  if (!exports.ox_inventory.RemoveItem(playerId, 'money', amount)) {
+    await conn.rollback();
+    return {
+      success: false,
+      message: 'something_went_wrong',
+    };
+  }
+
+  await conn.commit();
 
   emit('ox:depositedMoney', { playerId, accountId, amount });
 
@@ -321,6 +401,7 @@ export async function WithdrawMoney(
   amount: number,
   message?: string,
   note?: string,
+  idempotencyKey?: string,
 ): Promise<{ success: boolean; message?: string }> {
   amount = Number.parseInt(String(amount));
 
@@ -345,24 +426,51 @@ export async function WithdrawMoney(
 
   const affectedRows = await conn.update(safeRemoveBalance, [amount, accountId, amount]);
 
-  if (!affectedRows || !exports.ox_inventory.AddItem(playerId, 'money', amount)) {
-    conn.rollback();
+  if (!affectedRows) {
+    await conn.rollback();
     return {
       success: false,
       message: 'something_went_wrong',
     };
   }
 
-  await conn.execute(addTransaction, [
-    player.charId,
-    accountId,
-    null,
-    amount,
-    message ?? locales('withdraw'),
-    note,
-    balance - amount,
-    null,
-  ]);
+  // Recorded before the inventory is touched: rolling the balance back is
+  // enough to undo a refused withdrawal only while the item is not yet there.
+  try {
+    await conn.execute(addTransaction, [
+      player.charId,
+      accountId,
+      null,
+      amount,
+      message ?? locales('withdraw'),
+      note,
+      idempotencyKey ?? null,
+      balance - amount,
+      null,
+    ]);
+  } catch (e) {
+    await conn.rollback();
+
+    if (isDuplicateTransaction(e)) return { success: false, message: 'duplicate_transaction' };
+
+    console.error(`Failed to withdraw $${amount} from account<${accountId}>`);
+    console.log(e);
+
+    return {
+      success: false,
+      message: 'something_went_wrong',
+    };
+  }
+
+  if (!exports.ox_inventory.AddItem(playerId, 'money', amount)) {
+    await conn.rollback();
+    return {
+      success: false,
+      message: 'something_went_wrong',
+    };
+  }
+
+  await conn.commit();
 
   emit('ox:withdrewMoney', { playerId, accountId, amount });
 

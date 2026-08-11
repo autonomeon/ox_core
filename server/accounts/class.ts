@@ -19,6 +19,12 @@ import { CanPerformAction } from './roles';
 interface UpdateAccountBalance {
   amount: number;
   message?: string;
+  /**
+   * At most one transaction is recorded per key. A repeated call carrying a
+   * key already used is refused with `duplicate_transaction`, and no money
+   * moves.
+   */
+  idempotencyKey?: string;
 }
 
 interface RemoveAccountBalance extends UpdateAccountBalance {
@@ -32,6 +38,8 @@ interface TransferAccountBalance {
   message?: string;
   note?: string;
   actorId?: number;
+  /** See {@link UpdateAccountBalance.idempotencyKey}. */
+  idempotencyKey?: string;
 }
 
 export class OxAccount extends ClassInterface {
@@ -83,36 +91,44 @@ export class OxAccount extends ClassInterface {
   /**
    * Add funds to the account.
    */
-  async addBalance({ amount, message }: UpdateAccountBalance) {
-    return UpdateBalance(this.accountId, amount, 'add', false, message);
+  async addBalance({ amount, message, idempotencyKey }: UpdateAccountBalance) {
+    return UpdateBalance(this.accountId, amount, 'add', false, message, undefined, undefined, idempotencyKey);
   }
 
   /**
    * Remove funds from the account.
    */
-  async removeBalance({ amount, overdraw = false, message }: RemoveAccountBalance) {
-    return UpdateBalance(this.accountId, amount, 'remove', overdraw, message);
+  async removeBalance({ amount, overdraw = false, message, idempotencyKey }: RemoveAccountBalance) {
+    return UpdateBalance(this.accountId, amount, 'remove', overdraw, message, undefined, undefined, idempotencyKey);
   }
 
   /**
    * Transfer funds to another account.
    */
-  async transferBalance({ toId, amount, overdraw = false, message, note, actorId }: TransferAccountBalance) {
-    return PerformTransaction(this.accountId, toId, amount, overdraw, message, note, actorId);
+  async transferBalance({
+    toId,
+    amount,
+    overdraw = false,
+    message,
+    note,
+    actorId,
+    idempotencyKey,
+  }: TransferAccountBalance) {
+    return PerformTransaction(this.accountId, toId, amount, overdraw, message, note, actorId, idempotencyKey);
   }
 
   /**
    * Deposit money into the account.
    */
-  async depositMoney(playerId: number, amount: number, message?: string, note?: string) {
-    return DepositMoney(playerId, this.accountId, amount, message, note);
+  async depositMoney(playerId: number, amount: number, message?: string, note?: string, idempotencyKey?: string) {
+    return DepositMoney(playerId, this.accountId, amount, message, note, idempotencyKey);
   }
 
   /**
    * Withdraw money from the account.
    */
-  async withdrawMoney(playerId: number, amount: number, message?: string, note?: string) {
-    return WithdrawMoney(playerId, this.accountId, amount, message, note);
+  async withdrawMoney(playerId: number, amount: number, message?: string, note?: string, idempotencyKey?: string) {
+    return WithdrawMoney(playerId, this.accountId, amount, message, note, idempotencyKey);
   }
 
   /**
