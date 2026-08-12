@@ -1,5 +1,12 @@
 import { OxVehicle, Vec3 } from './class';
-import { CreateNewVehicle, GetStoredVehicleFromId, IsPlateAvailable, type VehicleRow } from './db';
+import {
+  CreateNewVehicle,
+  GetStoredVehicleFromId,
+  IsPlateAvailable,
+  SelectVehicleRow,
+  SelectVehicleRows,
+  type VehicleRow,
+} from './db';
 import { GetVehicleData } from '../../common/vehicles';
 import { DEBUG } from '../../common/config';
 import './class';
@@ -106,5 +113,33 @@ export async function SpawnVehicle(id: number | string, coords?: Vec3, heading?:
   return await CreateVehicle(vehicle, coords, heading, invokingScript);
 }
 
+/**
+ * Return a vehicle's persisted row by id or vin, spawned or not.
+ *
+ * Every other vehicle accessor answers from the live instance registry, so a
+ * vehicle nobody has spawned this session is invisible to all of them.
+ */
+export function GetStoredVehicle(idOrVin: number | string) {
+  return SelectVehicleRow(idOrVin);
+}
+
+/**
+ * Return every vehicle a character owns, parked or out in the world.
+ *
+ * `stored` names the facility for the ones parked and is null for the rest,
+ * which is what makes one read able to answer "where is each of my vehicles".
+ */
+export function GetStoredVehiclesForOwner(charId: number) {
+  return SelectVehicleRows('owner', charId);
+}
+
+/** Return every vehicle a group owns, parked or out in the world. */
+export function GetStoredVehiclesForGroup(group: string) {
+  return SelectVehicleRows('group', group);
+}
+
 exports('CreateVehicle', CreateVehicle);
 exports('SpawnVehicle', SpawnVehicle);
+exports('GetStoredVehicle', GetStoredVehicle);
+exports('GetStoredVehiclesForOwner', GetStoredVehiclesForOwner);
+exports('GetStoredVehiclesForGroup', GetStoredVehiclesForGroup);

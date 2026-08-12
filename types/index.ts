@@ -106,6 +106,27 @@ export interface VehicleData extends VehicleStats {
   [key: string]: unknown;
 }
 
+/**
+ * A vehicle's persisted row, as returned by the stored-vehicle read exports.
+ *
+ * A plain row rather than an OxVehicle: an OxVehicle has an entity and a netId
+ * by construction, so it can only describe a vehicle spawned right now.
+ */
+export interface OxVehicleRow {
+  id: number;
+  /** The charId of the owning character, if privately owned. */
+  owner?: number;
+  /** The name of the owning group, if group-owned. */
+  group?: string;
+  plate: string;
+  vin: string;
+  model: string;
+  class?: number;
+  data: Dict<any>;
+  /** Where the vehicle is stored, or null while it is out in the world. */
+  stored?: string;
+}
+
 export interface OxLicense {
   name?: string;
   label?: string;
