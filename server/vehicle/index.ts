@@ -1,6 +1,7 @@
 import { OxVehicle, Vec3 } from './class';
 import {
   CreateNewVehicle,
+  DeleteVehicle,
   GetStoredVehicleFromId,
   IsPlateAvailable,
   SelectVehicleRow,
@@ -138,8 +139,30 @@ export function GetStoredVehiclesForGroup(group: string) {
   return SelectVehicleRows('group', group);
 }
 
+/**
+ * Delete a vehicle's persisted row by id or vin, spawned or not.
+ *
+ * `OxVehicle.delete` reaches the live instance registry, so it cannot remove a
+ * vehicle nobody has spawned this session -- the whole set a garage holds.
+ * Answers whether the row is gone, which a caller disposing of an asset needs
+ * to distinguish from a delete that reached nothing.
+ *
+ * The live instance is resolved by vehicleId rather than `OxVehicle.get`,
+ * which spawns a stored vehicle when the registry misses.
+ */
+export async function DeleteStoredVehicle(idOrVin: number | string) {
+  const row = await SelectVehicleRow(idOrVin);
+
+  if (!row) return false;
+
+  const vehicle = OxVehicle.getFromVehicleId(row.id);
+
+  return vehicle ? await vehicle.delete() : await DeleteVehicle(row.id);
+}
+
 exports('CreateVehicle', CreateVehicle);
 exports('SpawnVehicle', SpawnVehicle);
 exports('GetStoredVehicle', GetStoredVehicle);
 exports('GetStoredVehiclesForOwner', GetStoredVehiclesForOwner);
 exports('GetStoredVehiclesForGroup', GetStoredVehiclesForGroup);
+exports('DeleteStoredVehicle', DeleteStoredVehicle);

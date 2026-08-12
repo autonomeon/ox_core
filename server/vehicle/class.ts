@@ -246,10 +246,12 @@ export class OxVehicle extends ClassInterface {
   }
 
   delete() {
-    if (this.id) DeleteVehicle(this.id);
+    const deleted = this.id ? DeleteVehicle(this.id) : Promise.resolve(false);
 
     this.despawn(false);
     OxVehicle.remove(this.vin);
+
+    return deleted;
   }
 
   remove() {
